@@ -58,12 +58,6 @@ void tick_ms_init()
   TIM3_Int_Init(9,7199);
 }
 
-//systick÷–∂œ
-void SysTick_Handler(void)
-{
-  l_timestamp++;
-}
-
 
 void delay_ms(uint64_t time_ms)
 {
