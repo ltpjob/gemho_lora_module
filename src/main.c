@@ -12,7 +12,11 @@
 
 static void *USERCOM = NULL;
 static void *L101CCOM = NULL;
-
+static void *l_hMsgFifo = NULL;
+static rt_sem_t l_sem_urx = RT_NULL;
+static rt_sem_t l_sem_key = RT_NULL;
+static rt_mq_t  l_mq_midLight = RT_NULL;
+static DeviceStatus l_devStatus = DEVICEOK;
 
 static const loraModu_config l_default_loraMCFG = 
 {
@@ -31,7 +35,7 @@ static loraModu_config l_loraModuConfig;
 static uint32_t l_nid = 0;
 
 //初始载入配置
-int load_config()
+static int load_config()
 {
   int ret = 0;
   
@@ -45,14 +49,14 @@ int load_config()
   return ret;
 }
 
-void L101C_reset()
+static void L101C_reset()
 {
   GPIO_ResetBits(GPIOB, GPIO_Pin_10);
   delay_ms(10);
   GPIO_SetBits(GPIOB, GPIO_Pin_10);
 }
 
-int wait_OK_noEnter(int timeout)
+static int wait_OK_noEnter(int timeout)
 {
   int ret = 0;
   char buf[128] = "";
@@ -72,7 +76,7 @@ int wait_OK_noEnter(int timeout)
 }
 
 
-int wait_OK(int timeout)
+static int wait_OK(int timeout)
 {
   int ret = 0;
   char buf[128] = "";
@@ -91,7 +95,7 @@ int wait_OK(int timeout)
   return ret;
 }
 
-int L101C_inAT(int loopTime, int timeout)
+static int L101C_inAT(int loopTime, int timeout)
 {
   int status = 0;
   
@@ -123,7 +127,7 @@ int L101C_inAT(int loopTime, int timeout)
   return status;
 }
 
-int ATCMD_waitOK(char *cmd, int loopTime, int timeout)
+static int ATCMD_waitOK(char *cmd, int loopTime, int timeout)
 {
   int status = 0;
   
@@ -141,8 +145,34 @@ int ATCMD_waitOK(char *cmd, int loopTime, int timeout)
   return status;
 }
 
+//获取版本号
+static int ATVER_cmd(char *cmd, int len)
+{
+	char buf[128] = "";
+  
+  if(len > sizeof(buf)-1)
+  {
+    usart_write(USERCOM, ERRORSTR, strlen(ERRORSTR));
+    return 0;
+  }
+	
+	memcpy(buf, cmd, len);
+	
+	if(strcmp(buf, ATVER) == 0)
+  {
+    snprintf(buf, sizeof(buf), "+VER:%s\r\n", VERSION);
+    usart_write(USERCOM, buf, strlen(buf));
+  }
+  else
+  {
+    usart_write(USERCOM, ERRORSTR, strlen(ERRORSTR));
+  }
+	
+	return 0;
+}
+
 //获取nid
-int get_nid(uint32_t *nid)
+static int get_nid(uint32_t *nid)
 {
   int ret = 0;
   uint8_t *pStart = NULL;
@@ -323,6 +353,54 @@ static int ATNID_cmd(char *cmd, int len)
   return 0;
 }
 
+//设置看门狗使能
+static int ATWDT_cmd(char *cmd, int len)
+{
+  char buf[128] = "";
+  
+  if(len > sizeof(buf)-1)
+  {
+    usart_write(USERCOM, ERRORSTR, strlen(ERRORSTR));
+    return 0;
+  }
+  
+  memcpy(buf, cmd, len);
+  
+  if(strcmp(buf, ATWDT) == 0)
+  {
+    snprintf(buf, sizeof(buf), "+WDT:%d\r\n", 
+             l_loraModuConfig.watchdog);
+    usart_write(USERCOM, buf, strlen(buf));
+  }
+  else if(memcmp(buf, ATWDTEQ, strlen(ATWDTEQ)) == 0)
+  {
+    int watchdog = -1;
+
+    if(sscanf(buf+strlen(ATWDTEQ), "%d", &watchdog) == 1)
+    {
+      if(watchdog <0 || watchdog>1)
+      {
+        usart_write(USERCOM, ERRORSTR, strlen(ERRORSTR));
+      }
+      else
+      {
+        l_loraModuConfig.watchdog = watchdog;
+        usart_write(USERCOM, OKSTR, strlen(OKSTR));
+      }
+    }
+    else
+    {
+      usart_write(USERCOM, ERRORSTR, strlen(ERRORSTR));
+    }
+  }
+  else
+  {
+    usart_write(USERCOM, ERRORSTR, strlen(ERRORSTR));
+  }
+  
+  return 0;
+}
+
 
 static int ATSAVE_cmd(char *cmd, int len)
 {
@@ -374,20 +452,22 @@ static int ATDELO_cmd(char *cmd, int len)
 }
 
 
-cmdExcute cmdExe[] = 
+static cmdExcute cmdExe[] = 
 {
+	{ATVER, ATVER_cmd},
   {ATRS232, ATRS232_cmd},
   {ATSPEED, ATSPEED_cmd},
   {ATCHN, ATCHN_cmd},
   {ATAPPID, ATAPPID_cmd},
   {ATNID, ATNID_cmd},
+	{ATWDT, ATWDT_cmd},
   {ATSAVE, ATSAVE_cmd},
   {ATDELO, ATDELO_cmd},
 };
 
 
 //时钟设置
-void RCC_Configuration(void)
+static void RCC_Configuration(void)
 {
   /* Enable GPIO clock */
   RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOB | RCC_APB2Periph_GPIOC | RCC_APB2Periph_USART1 | RCC_APB2Periph_AFIO, ENABLE);
@@ -396,7 +476,7 @@ void RCC_Configuration(void)
 }
 
 //io设置
-void GPIO_Configuration(void)
+static void GPIO_Configuration(void)
 {
   GPIO_InitTypeDef GPIO_InitStructure;
   
@@ -460,7 +540,7 @@ void GPIO_Configuration(void)
   
 }
 
-void RST_Configuration(void)
+static void RST_Configuration(void)
 {
   NVIC_InitTypeDef NVIC_InitStructure;
   EXTI_InitTypeDef EXTI_InitStructure;
@@ -482,7 +562,7 @@ void RST_Configuration(void)
   NVIC_Init(&NVIC_InitStructure);
 }
 
-void HOSTWAKE_Configuration(void)
+static void HOSTWAKE_Configuration(void)
 {
   NVIC_InitTypeDef NVIC_InitStructure;
   EXTI_InitTypeDef EXTI_InitStructure;
@@ -498,14 +578,14 @@ void HOSTWAKE_Configuration(void)
 
   /* Enable and set EXTI0 Interrupt to the lowest priority */
   NVIC_InitStructure.NVIC_IRQChannel = EXTI0_IRQn;
-  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 2;
+  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;
   NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
   NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
   NVIC_Init(&NVIC_InitStructure);
 }
 
 //BC95COM直连USERCOM
-void USERCOM_direct_L101C()
+static void USERCOM_direct_L101C()
 {
   while(1)
   {
@@ -527,7 +607,7 @@ void USERCOM_direct_L101C()
 }
 
 //gh配置
-void ghConfig()
+static void ghConfig()
 {
   int len = 0;
   uint8_t *pStart = NULL;
@@ -576,7 +656,7 @@ void ghConfig()
 }
 
 //开机模式选择
-ModeToRun start_mode()
+static ModeToRun start_mode()
 {
   ModeToRun mode = lucTrans;
   uint8_t buf[1024] = "";
@@ -612,7 +692,7 @@ ModeToRun start_mode()
 
 
 //初始配置
-int config_L101C()
+static int config_L101C()
 {
   int status = 0;
   char buf[128] = "";
@@ -684,28 +764,184 @@ int config_L101C()
   return status;
 }
 
+static int setDevicStatus(DeviceStatus status)
+{
+	l_devStatus = status;
+	
+	return 0;
+}
+
+static void wdt_entry(void *args)
+{
+	int wdt_en = l_loraModuConfig.watchdog;
+	
+	if(wdt_en == 1)
+	{
+		IWDG_Init(6, 0xfff);
+	}
+	
+	while(1)
+	{
+		if(wdt_en == 1)
+		{
+			IWDG_Feed();
+		}
+		
+		rt_thread_delay(rt_tick_from_millisecond(10*1000));
+	}
+}
+
+//控制中间的灯
+static int midLight_action(uint32_t interval_time, 
+	uint32_t blink_times, uint32_t stop_time, uint32_t urgent)
+{
+	lightAction la;
+	int ret = 0;
+	
+	la.interval_time = interval_time;
+	la.blink_times = blink_times;
+	la.stop_time = stop_time;
+	
+	if(urgent == 1)
+	{
+		ret = rt_mq_urgent(l_mq_midLight, &la, sizeof(la));
+		if(ret != RT_EOK)
+		{
+			lightAction tmp;
+			rt_mq_recv(l_mq_midLight, &tmp, sizeof(tmp), RT_WAITING_NO);
+			ret = rt_mq_urgent(l_mq_midLight, &la, sizeof(la));
+		}
+	}
+	else
+	{
+		ret = rt_mq_send(l_mq_midLight, &la, sizeof(la));
+	}
+	
+	return ret;
+}
+
+static DeviceStatus getDevicStatus()
+{
+	return l_devStatus;
+}
+
+//按键响应线程
+static void key_entry(void *args)
+{
+	l_sem_key = rt_sem_create("l_sem_key", 0, RT_IPC_FLAG_PRIO);
+	RST_Configuration();
+	
+	while(1)
+	{
+		if(rt_sem_take(l_sem_key, rt_tick_from_millisecond(1000)) == RT_EOK)
+		{
+			uint64_t uTouchDownTime = get_timestamp();
+			uint64_t uHoldTime = 0;
+			while(GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_13) == Bit_RESET)
+			{
+				rt_thread_delay(rt_tick_from_millisecond(50));
+			}
+			
+			uHoldTime = get_timestamp() - uTouchDownTime + 1;
+			if(uHoldTime>5*1000 && uHoldTime<10*1000)
+			{
+				if(save_config(&l_default_loraMCFG) == 0)
+				{
+					//控制灯闪16下
+					midLight_action(100, 16, 1000, 1);
+				}
+			}
+			else if(uHoldTime>0 && uHoldTime<1*500)
+			{
+				msg_push(l_hMsgFifo, KPMFT, strlen(KPMFT));
+			}
+		}
+	}
+}
+
+//中间灯闪烁管理
+static void midLight_entry(void *args)
+{
+	while(1)
+	{
+		lightAction la;
+		if(rt_mq_recv(l_mq_midLight, &la, sizeof(la), rt_tick_from_millisecond(1000)) == RT_EOK)
+		{
+			for(int i=0; i<la.blink_times; i++)
+			{
+				GPIO_ResetBits(GPIOC, GPIO_Pin_14);
+				rt_thread_delay(rt_tick_from_millisecond(la.interval_time));
+				GPIO_SetBits(GPIOC, GPIO_Pin_14);
+				rt_thread_delay(rt_tick_from_millisecond(la.interval_time));
+			}
+			rt_thread_delay(rt_tick_from_millisecond(la.stop_time));
+		}
+	}
+}
+
+//状态表示线程
+static void status_entry(void *args)
+{
+	while(1)
+	{
+		DeviceStatus status = getDevicStatus();
+		int blinkInter = 200;
+		
+		if(status == DEVICEOK)
+		{
+			GPIO_SetBits(GPIOC, GPIO_Pin_13);
+		}
+		else if(status == L101CDONTWORK)
+		{
+			for(int i=0; i<1; i++)
+			{
+				GPIO_ResetBits(GPIOC, GPIO_Pin_13);
+				rt_thread_delay(rt_tick_from_millisecond(blinkInter));
+				GPIO_SetBits(GPIOC, GPIO_Pin_13);
+				rt_thread_delay(rt_tick_from_millisecond(blinkInter));
+			}
+		}
+		
+		rt_thread_delay(rt_tick_from_millisecond(1500));
+	}
+		
+}
+
+//消息发送线程
+static void thread_msgSend(void *args)
+{
+	HOSTWAKE_Configuration();
+	while(1)
+	{
+		
+		
+	}
+}
+
+static rt_err_t urx_input(rt_device_t dev, rt_size_t size)
+{
+	
+	rt_sem_release(l_sem_urx);
+	
+	return RT_EOK;
+} 
+
 static void main_entry(void *args)
 {
-	RCC_Configuration();
-	GPIO_Configuration();
-	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_3);
-	tick_ms_init();
-	RST_Configuration();
-	config_init();
 
-	//led light off
-	GPIO_SetBits(GPIOC, GPIO_Pin_13);
-	GPIO_SetBits(GPIOC, GPIO_Pin_14);
-
-	GPIO_SetBits(GPIOB, GPIO_Pin_11);     //reload拉高
-	GPIO_SetBits(GPIOA, GPIO_Pin_1);    //wake拉低
-
-	load_config();
 
 	L101CCOM = usart_init("uart2", L101CBAUDRATE, 1, 0);
 	USERCOM = usart_init("uart1", l_loraModuConfig.baudrate, l_loraModuConfig.stopbit, l_loraModuConfig.parity);
 
-	config_L101C();
+	if(config_L101C() != 0)
+	{
+		setDevicStatus(L101CDONTWORK);
+	}
+	
+	l_hMsgFifo = msg_init(MSG_MAXLEN, 5);
+	rt_thread_t ht_msgSend = rt_thread_create("thread_msgSend", thread_msgSend, RT_NULL, 1024+512, 3, rt_tick_from_millisecond(10));
+	if (ht_msgSend!= RT_NULL)
+		rt_thread_startup(ht_msgSend);
 
 	ModeToRun mode = start_mode();
 
@@ -717,18 +953,71 @@ static void main_entry(void *args)
 	{
 		ghConfig();
 	}
-
-	HOSTWAKE_Configuration();
-
+	
+	l_sem_urx = rt_sem_create("l_sem_urx", 0, RT_IPC_FLAG_PRIO);
+	rt_device_set_rx_indicate(USERCOM, urx_input);
+	
+	while(1)
+	{
+		if(rt_sem_take(l_sem_urx, rt_tick_from_millisecond(200)) == RT_EOK)
+		{
+			int len;
+			char buf[512] = "";
+			
+			len = usart_read(USERCOM, buf, sizeof(buf), 100);
+			if(len > 0)
+			{
+				msg_push(l_hMsgFifo, buf, len);
+				midLight_action(50, 2, 500, 0);
+			}
+		}
+	}
 
 }
 
+
+
+
+
 int main(void)
 {
+	RCC_Configuration();
+	GPIO_Configuration();
+	
+	//led light off
+	GPIO_SetBits(GPIOC, GPIO_Pin_13);
+	GPIO_SetBits(GPIOC, GPIO_Pin_14);
+
+	GPIO_SetBits(GPIOB, GPIO_Pin_11);     //reload拉高
+	GPIO_SetBits(GPIOA, GPIO_Pin_1);    //wake拉低
+	
+	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_3);
+	tick_ms_init();
+	config_init();
+
+	load_config();
+	
+	l_mq_midLight = rt_mq_create("l_mq_midLight", sizeof(lightAction), 10, RT_IPC_FLAG_PRIO);
+	
+	rt_thread_t ht_key = rt_thread_create("key_entry", key_entry, RT_NULL, 256, 1, rt_tick_from_millisecond(10));
+	if (ht_key!= RT_NULL)
+		rt_thread_startup(ht_key);
+	
+	rt_thread_t ht_wdt = rt_thread_create("wdt_entry", wdt_entry, RT_NULL, 128, 1, rt_tick_from_millisecond(10));
+	if (ht_wdt!= RT_NULL)
+		rt_thread_startup(ht_wdt);
 	
 	rt_thread_t ht_main = rt_thread_create("main_entry", main_entry, RT_NULL, 2048, 2, rt_tick_from_millisecond(10));
 	if (ht_main!= RT_NULL)
 		rt_thread_startup(ht_main);
+	
+	rt_thread_t ht_status = rt_thread_create("status_entry", status_entry, RT_NULL, 256, 5, rt_tick_from_millisecond(10));
+	if (ht_status!= RT_NULL)
+		rt_thread_startup(ht_status);
+	
+	rt_thread_t ht_midLight = rt_thread_create("ht_midLight", midLight_entry, RT_NULL, 256, 5, rt_tick_from_millisecond(10));
+	if (ht_midLight!= RT_NULL)
+		rt_thread_startup(ht_midLight);
 	
 	while(1)
 	{
@@ -738,34 +1027,28 @@ int main(void)
 
 void EXTI15_10_IRQHandler(void)
 {
+	rt_interrupt_enter();
+	
   if(EXTI_GetITStatus(EXTI_Line15) != RESET)
   {
-    int count = 16;
-    if(save_config(&l_default_loraMCFG) == 0)
-    {
-      while(count--)
-      {
-        GPIO_ResetBits(GPIOC, GPIO_Pin_14);
-        delay_ms(100);
-        GPIO_SetBits(GPIOC, GPIO_Pin_14);
-        delay_ms(100);
-      }
-    }
+		rt_sem_release(l_sem_key);
 
     EXTI_ClearITPendingBit(EXTI_Line15);
   }
 
+	rt_interrupt_leave();
 }
 
 void EXTI0_IRQHandler(void)
 {
+	rt_interrupt_enter();
+	
   if(EXTI_GetITStatus(EXTI_Line0) != RESET)
   {
-
-
     EXTI_ClearITPendingBit(EXTI_Line0);
   }
 
+	rt_interrupt_leave();
 }
 
 

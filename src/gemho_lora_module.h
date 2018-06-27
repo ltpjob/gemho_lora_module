@@ -45,8 +45,6 @@ typedef enum tag_ModeToRun{
 typedef enum tag_DeviceStatus{
 	DEVICEOK = 0,
   L101CDONTWORK = -1,
-	CGATTTIMEOUT = -2,
-	CGATTTGETFAIL = -3,
 }DeviceStatus;
 
 
@@ -96,13 +94,16 @@ typedef struct tag_cmdExcute
 
 #define ATNID "AT+NID"    //查询应用 ID
 
+#define ATWDT "AT+WDT"    //是否开启看门狗  
+#define ATWDTEQ "AT+WDT=" 
+
 #define ATSAVE "AT+SAVE"   //存储配置
 #define ATDELO "AT+DELO"  //还原默认配置
 #define UDCMD "UNDEFINED CMD\r\n"
 
 #define KPMFT "key push message for test"
 
-#define VERSION "1.0.c2f5ce5.0"
+#define VERSION "1.0.0.0"
    
 #ifdef __cplusplus
  }
