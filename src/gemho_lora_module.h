@@ -36,6 +36,11 @@ typedef struct tag_lightAction
 	uint32_t stop_time;
 }lightAction;
 
+typedef struct tag_sendTimeing
+{
+  uint64_t irq_timeStamp;
+}sendTimeing;
+
 typedef enum tag_ModeToRun{
   atDebug = 0,
   gemhoConfig,

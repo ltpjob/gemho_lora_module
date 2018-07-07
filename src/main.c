@@ -16,6 +16,7 @@ static void *l_hMsgFifo = NULL;
 static rt_sem_t l_sem_urx = RT_NULL;
 static rt_sem_t l_sem_key = RT_NULL;
 static rt_mq_t  l_mq_midLight = RT_NULL;
+static rt_mq_t  l_mq_sendTiming = RT_NULL;
 static DeviceStatus l_devStatus = DEVICEOK;
 
 static const loraModu_config l_default_loraMCFG = 
@@ -910,10 +911,38 @@ static void status_entry(void *args)
 //消息发送线程
 static void thread_msgSend(void *args)
 {
+	l_mq_sendTiming = rt_mq_create("l_mq_sendTiming", sizeof(sendTimeing), 10, RT_IPC_FLAG_PRIO);
 	HOSTWAKE_Configuration();
 	while(1)
 	{
-		
+		sendTimeing stiming;
+		if(rt_mq_recv(l_mq_sendTiming, &stiming, sizeof(stiming), rt_tick_from_millisecond(1000)) == RT_EOK)
+		{
+			uint8_t msgData[512] = "";
+			uint16_t msgSize = 0;
+			int ret = 0;
+			
+			if(get_timestamp() - stiming.irq_timeStamp >= 5)
+			{
+				continue;
+			}
+//			else
+//			{
+//				char buf[64] = "";
+//				snprintf(buf, sizeof(buf), "tmpTime:%llu\r\n", get_timestamp() - stiming.irq_timeStamp);
+//				usart_write(USERCOM, buf, strlen(buf));
+//			}
+			
+			ret = msg_pop(l_hMsgFifo, &msgData, &msgSize, RT_WAITING_NO);
+//			char buf[64] = "";
+//			snprintf(buf, sizeof(buf), "msgSize:%d\r\n", msgSize);
+//			usart_write(USERCOM, buf, strlen(buf));
+			if(ret == 0)
+			{
+				usart_write(L101CCOM, msgData, msgSize);
+				midLight_action(50, 8, 300, 0);
+			}
+		}
 		
 	}
 }
@@ -1045,6 +1074,17 @@ void EXTI0_IRQHandler(void)
 	
   if(EXTI_GetITStatus(EXTI_Line0) != RESET)
   {
+		sendTimeing stiming;
+		rt_err_t ret;
+		stiming.irq_timeStamp = get_timestamp();
+		ret = rt_mq_urgent(l_mq_sendTiming, &stiming, sizeof(stiming));
+		if(ret != RT_EOK)
+		{
+			sendTimeing tmp;
+			rt_mq_recv(l_mq_sendTiming, &tmp, sizeof(tmp), RT_WAITING_NO);
+			rt_mq_urgent(l_mq_sendTiming, &stiming, sizeof(stiming));
+		}
+		
     EXTI_ClearITPendingBit(EXTI_Line0);
   }
 
