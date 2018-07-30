@@ -19,6 +19,7 @@ typedef struct tag_loraModu_config
   uint8_t stopbit;
   uint8_t parity;
 	uint8_t watchdog;
+	uint8_t msgSave;
 }loraModu_config;
 
 typedef struct tag_confSaveUnit
@@ -88,6 +89,9 @@ typedef struct tag_cmdExcute
 #define ATRS232 "AT+RS232"
 #define ATRS232EQ "AT+RS232="
 
+#define ATMSGS "AT+MSGS" //设置缓存大小   
+#define ATMSGSEQ "AT+MSGS=" 
+
 #define ATSPEED "AT+SPEED" //设置/查询速率等级
 #define ATSPEEDEQ "AT+SPEED=" 
 
@@ -108,7 +112,7 @@ typedef struct tag_cmdExcute
 
 #define KPMFT "key push message for test"
 
-#define VERSION "1.0.0.0"
+#define VERSION "1.0.e05d5e3.1"
    
 #ifdef __cplusplus
  }

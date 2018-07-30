@@ -28,6 +28,7 @@ static const loraModu_config l_default_loraMCFG =
   .stopbit = 1,
   .parity = 0,
 	.watchdog = 0,
+	.msgSave = 5,
 };
 
 
@@ -208,6 +209,53 @@ static int ATRS232_cmd(char *cmd, int len)
   return 0;
 }
 
+static int ATMSGS_cmd(char *cmd, int len)
+{
+  char buf[128] = "";
+  
+  if(len > sizeof(buf)-1)
+  {
+    usart_write(USERCOM, ERRORSTR, strlen(ERRORSTR));
+    return 0;
+  }
+  
+  memcpy(buf, cmd, len);
+  
+  if(strcmp(buf, ATMSGS) == 0)
+  {
+    snprintf(buf, sizeof(buf), "+MSGS:%d\r\n", 
+             l_loraModuConfig.msgSave);
+    usart_write(USERCOM, buf, strlen(buf));
+  }
+  else if(memcmp(buf, ATMSGSEQ, strlen(ATMSGSEQ)) == 0)
+  {
+    int msgSave = -1;
+
+    if(sscanf(buf+strlen(ATMSGSEQ), "%d", &msgSave) == 1)
+    {
+      if(msgSave <1 || msgSave>5)
+      {
+        usart_write(USERCOM, ERRORSTR, strlen(ERRORSTR));
+      }
+      else
+      {
+        l_loraModuConfig.msgSave = msgSave;
+        usart_write(USERCOM, OKSTR, strlen(OKSTR));
+      }
+    }
+    else
+    {
+      usart_write(USERCOM, ERRORSTR, strlen(ERRORSTR));
+    }
+  }
+  else
+  {
+    usart_write(USERCOM, ERRORSTR, strlen(ERRORSTR));
+  }
+  
+  return 0;
+}
+
 
 static int ATSPEED_cmd(char *cmd, int len)
 {
@@ -269,11 +317,11 @@ static int ATCHN_cmd(char *cmd, int len)
   }
   else if(memcmp(buf, ATCHNEQ, strlen(ATCHNEQ)) == 0)
   {
-    uint32_t speed;
+    uint32_t chn;
     
-    if(checkConfigSPD(buf+strlen(ATCHNEQ), &speed) == 0)
+    if(checkConfigCHN(buf+strlen(ATCHNEQ), &chn) == 0)
     {
-      l_loraModuConfig.spd = speed;
+      l_loraModuConfig.ch = chn;
       
       usart_write(USERCOM, OKSTR, strlen(OKSTR));
     }
@@ -457,6 +505,7 @@ static cmdExcute cmdExe[] =
 {
 	{ATVER, ATVER_cmd},
   {ATRS232, ATRS232_cmd},
+	{ATMSGS, ATMSGS_cmd},
   {ATSPEED, ATSPEED_cmd},
   {ATCHN, ATCHN_cmd},
   {ATAPPID, ATAPPID_cmd},
@@ -967,7 +1016,9 @@ static void main_entry(void *args)
 		setDevicStatus(L101CDONTWORK);
 	}
 	
-	l_hMsgFifo = msg_init(MSG_MAXLEN, 5);
+	midLight_action(2000, 1, 200, 1);
+	
+	l_hMsgFifo = msg_init(MSG_MAXLEN, l_loraModuConfig.msgSave);
 	rt_thread_t ht_msgSend = rt_thread_create("thread_msgSend", thread_msgSend, RT_NULL, 1024+512, 3, rt_tick_from_millisecond(10));
 	if (ht_msgSend!= RT_NULL)
 		rt_thread_startup(ht_msgSend);
