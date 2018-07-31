@@ -53,9 +53,9 @@ static int load_config()
 
 static void L101C_reset()
 {
-  GPIO_ResetBits(GPIOB, GPIO_Pin_10);
+  GPIO_ResetBits(GPIOA, GPIO_Pin_7);
   delay_ms(10);
-  GPIO_SetBits(GPIOB, GPIO_Pin_10);
+  GPIO_SetBits(GPIOA, GPIO_Pin_7);
 }
 
 static int wait_OK_noEnter(int timeout)
@@ -522,7 +522,7 @@ static void RCC_Configuration(void)
   /* Enable GPIO clock */
   RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOB | RCC_APB2Periph_GPIOC | RCC_APB2Periph_USART1 | RCC_APB2Periph_AFIO, ENABLE);
   
-  RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART2 | RCC_APB1Periph_I2C1, ENABLE);
+  RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART3 | RCC_APB1Periph_I2C1, ENABLE);
 }
 
 //io设置
@@ -542,14 +542,14 @@ static void GPIO_Configuration(void)
   
   
   //L101-C
-  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_3;
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11;
   GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
-  GPIO_Init(GPIOA, &GPIO_InitStructure);
+  GPIO_Init(GPIOB, &GPIO_InitStructure);
   
-  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_2;
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10;
   GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
   GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
-  GPIO_Init(GPIOA, &GPIO_InitStructure);
+  GPIO_Init(GPIOB, &GPIO_InitStructure);
   
     //i2c1
   GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6 | GPIO_Pin_7;
@@ -557,11 +557,11 @@ static void GPIO_Configuration(void)
   GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_OD;
   GPIO_Init(GPIOB, &GPIO_InitStructure);
   
-  //Lora_REST Lora_REST1
-  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10 | GPIO_Pin_11;
+  //Lora_REST Lora_RELOAD
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_7 | GPIO_Pin_6;
   GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
   GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
-  GPIO_Init(GPIOB, &GPIO_InitStructure);
+  GPIO_Init(GPIOA, &GPIO_InitStructure);
   
   //led_R led_Y
   GPIO_InitStructure.GPIO_Pin = GPIO_Pin_13 | GPIO_Pin_14;
@@ -577,13 +577,13 @@ static void GPIO_Configuration(void)
   GPIO_Init(GPIOC, &GPIO_InitStructure);
   
   //HOST_WAKE
-  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4;
   GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
   GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
   GPIO_Init(GPIOA, &GPIO_InitStructure);
   
   //WAKE 
-  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1;
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_5;
   GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
   GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
   GPIO_Init(GPIOA, &GPIO_InitStructure);
@@ -617,21 +617,50 @@ static void HOSTWAKE_Configuration(void)
   NVIC_InitTypeDef NVIC_InitStructure;
   EXTI_InitTypeDef EXTI_InitStructure;
   
-  GPIO_EXTILineConfig(GPIO_PortSourceGPIOA, GPIO_PinSource0);
+  GPIO_EXTILineConfig(GPIO_PortSourceGPIOA, GPIO_PinSource4);
 
   /* Configure EXTI0 line */
-  EXTI_InitStructure.EXTI_Line = EXTI_Line0;
+  EXTI_InitStructure.EXTI_Line = EXTI_Line4;
   EXTI_InitStructure.EXTI_Mode = EXTI_Mode_Interrupt;
   EXTI_InitStructure.EXTI_Trigger = EXTI_Trigger_Rising;  
   EXTI_InitStructure.EXTI_LineCmd = ENABLE;
   EXTI_Init(&EXTI_InitStructure);
 
   /* Enable and set EXTI0 Interrupt to the lowest priority */
-  NVIC_InitStructure.NVIC_IRQChannel = EXTI0_IRQn;
+  NVIC_InitStructure.NVIC_IRQChannel = EXTI4_IRQn;
   NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;
   NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
   NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
   NVIC_Init(&NVIC_InitStructure);
+}
+
+//控制中间的灯
+static int midLight_action(uint32_t interval_time, 
+	uint32_t blink_times, uint32_t stop_time, uint32_t urgent)
+{
+	lightAction la;
+	int ret = 0;
+	
+	la.interval_time = interval_time;
+	la.blink_times = blink_times;
+	la.stop_time = stop_time;
+	
+	if(urgent == 1)
+	{
+		ret = rt_mq_urgent(l_mq_midLight, &la, sizeof(la));
+		if(ret != RT_EOK)
+		{
+			lightAction tmp;
+			rt_mq_recv(l_mq_midLight, &tmp, sizeof(tmp), RT_WAITING_NO);
+			ret = rt_mq_urgent(l_mq_midLight, &la, sizeof(la));
+		}
+	}
+	else
+	{
+		ret = rt_mq_send(l_mq_midLight, &la, sizeof(la));
+	}
+	
+	return ret;
 }
 
 //BC95COM直连USERCOM
@@ -735,6 +764,8 @@ static ModeToRun start_mode()
 //      coap_msgSend(l_uartBuf, l_cnt);
 //    else
 //      udp_msgSend(l_uartBuf, l_cnt);
+		msg_push(l_hMsgFifo, buf, len);
+		midLight_action(50, 2, 500, 0);
   }
   
   return mode;
@@ -807,7 +838,7 @@ static int config_L101C()
   
   if(status == 0)
   {
-    usart_write(USERCOM, "INIT OK\r\n", strlen("INIT OK\r\n"));
+//    usart_write(USERCOM, "INIT OK\r\n", strlen("INIT OK\r\n"));
     
   }
  
@@ -841,35 +872,6 @@ static void wdt_entry(void *args)
 	}
 }
 
-//控制中间的灯
-static int midLight_action(uint32_t interval_time, 
-	uint32_t blink_times, uint32_t stop_time, uint32_t urgent)
-{
-	lightAction la;
-	int ret = 0;
-	
-	la.interval_time = interval_time;
-	la.blink_times = blink_times;
-	la.stop_time = stop_time;
-	
-	if(urgent == 1)
-	{
-		ret = rt_mq_urgent(l_mq_midLight, &la, sizeof(la));
-		if(ret != RT_EOK)
-		{
-			lightAction tmp;
-			rt_mq_recv(l_mq_midLight, &tmp, sizeof(tmp), RT_WAITING_NO);
-			ret = rt_mq_urgent(l_mq_midLight, &la, sizeof(la));
-		}
-	}
-	else
-	{
-		ret = rt_mq_send(l_mq_midLight, &la, sizeof(la));
-	}
-	
-	return ret;
-}
-
 static DeviceStatus getDevicStatus()
 {
 	return l_devStatus;
@@ -887,7 +889,7 @@ static void key_entry(void *args)
 		{
 			uint64_t uTouchDownTime = get_timestamp();
 			uint64_t uHoldTime = 0;
-			while(GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_13) == Bit_RESET)
+			while(GPIO_ReadInputDataBit(GPIOC, GPIO_Pin_15) == Bit_RESET)
 			{
 				rt_thread_delay(rt_tick_from_millisecond(50));
 			}
@@ -919,9 +921,9 @@ static void midLight_entry(void *args)
 		{
 			for(int i=0; i<la.blink_times; i++)
 			{
-				GPIO_ResetBits(GPIOC, GPIO_Pin_14);
+				GPIO_ResetBits(GPIOC, GPIO_Pin_13);
 				rt_thread_delay(rt_tick_from_millisecond(la.interval_time));
-				GPIO_SetBits(GPIOC, GPIO_Pin_14);
+				GPIO_SetBits(GPIOC, GPIO_Pin_13);
 				rt_thread_delay(rt_tick_from_millisecond(la.interval_time));
 			}
 			rt_thread_delay(rt_tick_from_millisecond(la.stop_time));
@@ -939,15 +941,15 @@ static void status_entry(void *args)
 		
 		if(status == DEVICEOK)
 		{
-			GPIO_SetBits(GPIOC, GPIO_Pin_13);
+			GPIO_SetBits(GPIOC, GPIO_Pin_14);
 		}
 		else if(status == L101CDONTWORK)
 		{
 			for(int i=0; i<1; i++)
 			{
-				GPIO_ResetBits(GPIOC, GPIO_Pin_13);
+				GPIO_ResetBits(GPIOC, GPIO_Pin_14);
 				rt_thread_delay(rt_tick_from_millisecond(blinkInter));
-				GPIO_SetBits(GPIOC, GPIO_Pin_13);
+				GPIO_SetBits(GPIOC, GPIO_Pin_14);
 				rt_thread_delay(rt_tick_from_millisecond(blinkInter));
 			}
 		}
@@ -1008,7 +1010,7 @@ static void main_entry(void *args)
 {
 
 
-	L101CCOM = usart_init("uart2", L101CBAUDRATE, 1, 0);
+	L101CCOM = usart_init("uart3", L101CBAUDRATE, 1, 0);
 	USERCOM = usart_init("uart1", l_loraModuConfig.baudrate, l_loraModuConfig.stopbit, l_loraModuConfig.parity);
 
 	if(config_L101C() != 0)
@@ -1068,8 +1070,8 @@ int main(void)
 	GPIO_SetBits(GPIOC, GPIO_Pin_13);
 	GPIO_SetBits(GPIOC, GPIO_Pin_14);
 
-	GPIO_SetBits(GPIOB, GPIO_Pin_11);     //reload拉高
-	GPIO_SetBits(GPIOA, GPIO_Pin_1);    //wake拉低
+	GPIO_SetBits(GPIOA, GPIO_Pin_6);     //reload拉高
+	GPIO_SetBits(GPIOA, GPIO_Pin_5);    //wake拉高
 	
 	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_3);
 	tick_ms_init();
@@ -1119,11 +1121,11 @@ void EXTI15_10_IRQHandler(void)
 	rt_interrupt_leave();
 }
 
-void EXTI0_IRQHandler(void)
+void EXTI4_IRQHandler(void)
 {
 	rt_interrupt_enter();
 	
-  if(EXTI_GetITStatus(EXTI_Line0) != RESET)
+  if(EXTI_GetITStatus(EXTI_Line4) != RESET)
   {
 		sendTimeing stiming;
 		rt_err_t ret;
@@ -1136,7 +1138,7 @@ void EXTI0_IRQHandler(void)
 			rt_mq_urgent(l_mq_sendTiming, &stiming, sizeof(stiming));
 		}
 		
-    EXTI_ClearITPendingBit(EXTI_Line0);
+    EXTI_ClearITPendingBit(EXTI_Line4);
   }
 
 	rt_interrupt_leave();
