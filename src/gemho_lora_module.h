@@ -112,7 +112,7 @@ typedef struct tag_cmdExcute
 
 #define KPMFT "key push message for test"
 
-#define VERSION "1.0.e05d5e3.1"
+#define VERSION "1.0.849ede9.1"
    
 #ifdef __cplusplus
  }
